@@ -1,0 +1,182 @@
+---
+title: "Trabalho da Disciplina de Programação em R da Pós Graduação de Ciência de Dados da Unicarioca"
+output:
+    md_document:
+      variant: markdown_github
+---
+## Grupo:
+### - Rafael dos Santos Torres - 2023000093
+### - Natan da Silva Magalhães - 2023000135
+ 
+## Professor: Sérgio Monteiro, DSc
+```{r}
+library('quantmod')
+library('TTR')
+library('forecast')
+library('prophet')
+library(dplyr)
+library("MASS")
+require(xgboost)
+library(Metrics)
+library(pastecs)
+```
+```{r}
+options(scipen=999)
+```
+
+```{r}
+getSymbols('PETR4.SA', src='yahoo')
+```
+Para essa análise, vamos considerar o valor de Fechamento (PETR4.SA.Close) como a variável alvo. Como a mediana e a média são valores muito próximos, podemos inferir que os dados possuem uma distribuição simétrica em torno da média.
+```{r}
+stat.desc(PETR4.SA$PETR4.SA.Close, norm=TRUE)
+```
+
+```{r}
+chartSeries(PETR4.SA, subset = 'last 1 year')
+addBBands()
+addSMA()
+addMACD()
+```
+Com o histograme e gráfico KDE abaixo, podemos verificar que os valores da série temporal seguem uma distribuição normal, o que significa que os as ações da PETR4 vão girar em torno do valor da média (que nesse caso é 23,70). Quando os valores das ações estiverem muito acima da média, eles terão uma tendência a cair, e, da mesma maneira, quando os valores estiverem muito abaixo, a tendencia sera um novo crescimento.
+```{r}
+hist(PETR4.SA$PETR4.SA.Close, main='Close', xlab = 'Close', labels=TRUE)
+```
+```{r}
+plot(density(PETR4.SA$PETR4.SA.Close))
+```
+```{r}
+lineChart(PETR4.SA$PETR4.SA.Close)
+addEMA(n=365)
+```
+```{r}
+date = '2024-04'
+```
+
+```{r}
+plot(PETR4.SA[date]$PETR4.SA.Close)
+plot(rollmean(PETR4.SA[date]$PETR4.SA.Close, k=7))
+plot(rollmean(PETR4.SA[date]$PETR4.SA.Close, k=15))
+```
+O valor das ações estão em crescimento contínuo, com valor de mais ou menos 40, o que supera dois desvios padrões. Como discutido anteriormente, nós entendemos que a tendência é uma queda dos valores em um futuro próximo. Para uma melhor análise, vamos conduzir a criação de alguns modelos.
+
+## ARIMA
+Primeiro devemos encontrar quantas dferenciações dos dados são necessárias para que a série temporal se torne estacionária, já que estacionariedade é um requisito do modelo ARIMA.
+Com o gráfico abaixo, podemos verificar que a série se torna estacionário com apenas uma diferenciação.
+```{r}
+par(mfrow=c(3,1))
+plot(PETR4.SA$PETR4.SA.Close)
+plot(diff(PETR4.SA$PETR4.SA.Close))
+plot(diff(diff(PETR4.SA$PETR4.SA.Close)))
+```
+
+O gráfico ACF mostra a autocorrelação da série com determinados valores de lag.
+```{r}
+acf(diff(PETR4.SA$PETR4.SA.Close), na.action = na.pass)
+```
+PACF mostra o quanto a autocorrelação da série pode ser explicada por consecutivos valores de lag.
+```{r}
+pacf(diff(PETR4.SA$PETR4.SA.Close), na.action = na.pass)
+```
+Escolhemos auto.arima para criar o modelo, já que ele decide de maneira autônoma os melhores valores para os parêmtros AR, I e MA.
+```{r}
+train_date = '/2023'
+test_date = '2024'
+model = auto.arima(PETR4.SA[train_date]$PETR4.SA.Close)
+checkresiduals(model)
+```
+
+```{r}
+pred = forecast(model, h = length(PETR4.SA[test_date]$PETR4.SA.Close))
+autoplot(pred)
+```
+O modelo auto.arima escolheu os parâmetros AR = 0, I = 1 e MA = 0, o que resulta em um simples Random Walk, o que significa que nosso modelo não é melhor do que tentar advinhar valores aleatoriamente.
+
+## Prophet
+Com isso, optamos por tentar também o modelo Prophet do Facebook.
+Primeiro, precisamos de um Dataframe com as colunas ds (com as datas) e a coluna y (com os valores a serem predizidos).
+```{r}
+df_for_prophet = data.frame(
+  ds = index(PETR4.SA),
+  y = PETR4.SA$PETR4.SA.Close
+)
+names(df_for_prophet) = c('ds', 'y')
+```
+
+```{r}
+prophet_model = prophet(df_for_prophet, daily.seasonality = TRUE)
+```
+
+Previsão para os próximos 120 dias.
+```{r}
+future = make_future_dataframe(prophet_model, periods=120)
+p_forecast = predict(prophet_model, future)
+tail(p_forecast[c('ds', 'yhat', 'yhat_lower', 'yhat_upper')])
+```
+O gráfico abaixo mostra o resultado da previsão do nosso modelo Prophet. Podemos perceber inicialmente que o modelo conseguiu assimilar as características de ciclos e tendências da série temporal. Além disso, o modelo indica uma continuação no aumento das ações da PETR4.
+```{r}
+plot(prophet_model, p_forecast)
+```
+
+```{r}
+prophet_plot_components(prophet_model, p_forecast)
+```
+```{r}
+p_cv = cross_validation(prophet_model, horizon=14, units='days')
+```
+
+```{r}
+performance_metrics(p_cv)
+```
+Como métrica para o resultado do modelo Prophet, temos um MSE de 17.00217 para uma predição com um horizonte de 14 dias.
+
+## Linear Regression
+Agora vamos tentar um modelo linear.
+```{r}
+PETR4.SA$Preco_Proximo_Dia <- lead(PETR4.SA$PETR4.SA.Close)
+dados_treino <- PETR4.SA["2022-01-01/2023-12-31", ]
+dados_teste <- PETR4.SA["2024-01-01/2024-12-31", ]
+```
+
+```{r}
+modelo_lm <- lm(Preco_Proximo_Dia ~ PETR4.SA.Close + PETR4.SA.Open + PETR4.SA.High + PETR4.SA.Low + PETR4.SA.Volume + PETR4.SA.Adjusted, data = dados_treino)
+```
+
+```{r}
+summary(modelo_lm)
+```
+Com um valor de R-Squared próximo a 1, temos um indicativo de que o modelo consegue explicar a maior parte da variância dos dados.
+```{r}
+lm_pred <- predict(modelo_lm, newdata = dados_teste[,0:6])
+xts_test = xts(lm_pred, order.by=index(dados_teste))
+plot(dados_teste[,7], col='green')
+lines(xts_test, col='red')
+```
+## XGBOOST
+```{r}
+xgb_model = xgboost(data = dados_treino[,0:6], label = dados_treino[,7], nrounds = 1000, verbose=0 )
+```
+
+```{r}
+xgb_pred = predict(xgb_model, newdata = dados_teste[,0:6])
+xgb_pred_xts = xts(xgb_pred, order.by=index(dados_teste))
+```
+
+```{r}
+plot(dados_teste[,7], col='green')
+lines(xts_test, col='red')
+lines(xgb_pred_xts, col='yellow')
+```
+## Considerações finais
+```{r}
+mse_custom = function(facts, pred){
+  return (mean((as.vector(facts) - as.vector(pred))^2, na.rm=TRUE))
+}
+```
+
+```{r}
+paste('MSE Linear Regression', mse_custom(dados_teste$Preco_Proximo_Dia, xts_test))
+paste('MSE XGBoost', mse_custom(dados_teste$Preco_Proximo_Dia, xgb_pred_xts))
+```
+Considerando os resultados obtidos, podemos selecionar o modelo de Regressão Linear como o que obteve melhor resultado de acordo com a métrica MSE. Porém, tendo em vista a diferença entre os outros modelos, e também como o modelo segue de maneira muito próxima os dados originais, suspeitamos de um possível vazamento de dados, o que acarreta em overfitting. Com isso, temos que o modelo Prophet, no momento, é o mais confiável.
+
