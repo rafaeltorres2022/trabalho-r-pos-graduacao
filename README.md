@@ -383,7 +383,7 @@ performance_metrics(p_cv)
     ## 9 14 days 17.19562 4.146760 3.190602 0.1624386 0.11100865 0.1615609 0.5752116
 
 Como métrica para o resultado do modelo Prophet, temos um MSE de
-17.00217 para uma predição com um horizonte de 14 dias.
+12.83388 para uma predição com um horizonte de 4 dias.
 
 ## Linear Regression
 
